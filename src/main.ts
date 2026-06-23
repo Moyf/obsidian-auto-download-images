@@ -122,6 +122,43 @@ function sanitizeFolderName(name: string): string {
     || 'attachments';
 }
 
+// 笔记名清理：空白→短横，非法字符→下划线（保留中文、字母、数字、下划线等）
+// Sanitize a note name: whitespace→dash, illegal chars→underscore (keeps CJK, letters, digits, underscores, etc.)
+function sanitizeNoteName(basename: string): string {
+  return basename
+    .replace(/\s+/g, '-')
+    .replace(/[\\/:*?"<>|]/g, '_');
+}
+
+// 左侧补零 | Left-pad a number with zeros to the given width
+function zeroPad(num: number, width: number): string {
+  let s = String(num);
+  while (s.length < width) s = '0' + s;
+  return s;
+}
+
+// 日期格式化（手写子集，避免依赖 moment）| Date formatter (hand-written subset, no moment dependency)
+// 支持 token：YYYY YY MM M DD D HH H mm m ss s | Supported tokens
+function formatDateToken(token: string, date: Date = new Date()): string {
+  const map: Record<string, string> = {
+    'YYYY': String(date.getFullYear()),
+    'YY':   String(date.getFullYear()).slice(-2),
+    'MM':   zeroPad(date.getMonth() + 1, 2),
+    'M':    String(date.getMonth() + 1),
+    'DD':   zeroPad(date.getDate(), 2),
+    'D':    String(date.getDate()),
+    'HH':   zeroPad(date.getHours(), 2),
+    'H':    String(date.getHours()),
+    'mm':   zeroPad(date.getMinutes(), 2),
+    'm':    String(date.getMinutes()),
+    'ss':   zeroPad(date.getSeconds(), 2),
+    's':    String(date.getSeconds()),
+  };
+  // 长令牌在前，避免 YY 抢占 YYYY、M 抢占 MM
+  // Longer tokens first to prevent YY matching inside YYYY, M inside MM, etc.
+  return token.replace(/YYYY|YY|MM|M|DD|D|HH|H|mm|m|ss|s/g, (m) => map[m] ?? m);
+}
+
 /**
  * 以有限并发度运行异步任务列表，返回与入参顺序一致的结果数组
  * Run async tasks with a concurrency limit; returns results in the same order as input
@@ -241,7 +278,7 @@ export default class AutoDownloadAttachmentsPlugin extends Plugin {
   }
 
   resolveAttachmentFolder(file: TFile): string {
-    const { attachmentPathMode, customAttachmentFolder } = this.settings;
+    const { attachmentPathMode, customAttachmentFolder, customTemplateFolder } = this.settings;
     const fileDir = file.parent?.path ?? '';
 
     switch (attachmentPathMode) {
@@ -262,9 +299,50 @@ export default class AutoDownloadAttachmentsPlugin extends Plugin {
         const safeName = sanitizeFolderName(file.basename);
         return normalizePath(`${fileDir}/${safeName}`);
       }
+      case 'customTemplate': {
+        // 路径模板从 vault 根目录解析，支持 {date:FORMAT} 和 {notename} 占位符
+        // Path template resolved from vault root, supports {date:FORMAT} and {notename} tokens
+        return this.formatPathTemplate(customTemplateFolder || 'assets/{date:YYYY-MM}', file);
+      }
       default:
         return normalizePath('attachments');
     }
+  }
+
+  // 将路径模板解析为 vault 根目录下的绝对路径
+  // Resolve a path template into an absolute path from the vault root
+  formatPathTemplate(template: string, file: TFile): string {
+    const noteName = sanitizeNoteName(file.basename);
+    // 统一分隔符为 /，按段处理，逐段做占位符替换与清理，再重新拼接
+    // Normalize separators to /, process per-segment, then rejoin
+    const segments = template.replace(/\\/g, '/').split('/');
+    const resolved = segments
+      .map(seg => {
+        let out = seg;
+        out = out.replace(/{date:([^}]+)}/g, (_, fmt: string) => formatDateToken(fmt));
+        out = out.replace(/{notename}/g, noteName);
+        return sanitizeFolderName(out);
+      })
+      .filter(seg => seg.length > 0);
+    return normalizePath(resolved.join('/'));
+  }
+
+  // 将文件名模板解析为最终文件名主干（不含扩展名）
+  // Resolve a filename template into the final name stem (without extension)
+  formatNameTemplate(template: string, noteName: string, index: number): string {
+    let out = template;
+    out = out.replace(/{date:([^}]+)}/g, (_, fmt: string) => formatDateToken(fmt));
+    out = out.replace(/{notename}/g, noteName);
+    // {index:NNN} —— NNN 的位数决定补零宽度，数值决定起始值
+    // {index:NNN} — width = number of digits, start = numeric value of digits
+    out = out.replace(/{index:(\d+)}/g, (_, digits: string) => {
+      const width = digits.length;
+      const start = parseInt(digits, 10);
+      return zeroPad(start + index, width);
+    });
+    // 清理非法文件名字符
+    // Sanitize illegal filename characters
+    return out.replace(/\s+/g, '-').replace(/[\\/:*?"<>|]/g, '_');
   }
 
   async downloadImagesInFile(file: TFile): Promise<void> {
@@ -305,13 +383,11 @@ export default class AutoDownloadAttachmentsPlugin extends Plugin {
       const attachmentFolder = this.resolveAttachmentFolder(file);
       await this.ensureFolder(attachmentFolder);
 
-      const titleBase = file.basename
-        .replace(/\s+/g, '-')
-        .replace(/[\\/:*?"<>|]/g, '_');
+      const noteName = sanitizeNoteName(file.basename);
 
       const urlToLocal = new Map<string, string>();
       const failedUrls: string[]  = [];
-      let savedCount = 1;
+      let savedIndex = 0;
 
       const downloadResults = await runWithConcurrency(
         uniqueUrls.map(url => async () => {
@@ -329,15 +405,14 @@ export default class AutoDownloadAttachmentsPlugin extends Plugin {
           continue;
         }
 
-        const rawName = `${titleBase}-${savedCount}${ext}`
-          .replace(/\s+/g, '-')
-          .replace(/[\\:*?"<>|]/g, '_');
+        const stem = this.formatNameTemplate(this.settings.imageNameTemplate, noteName, savedIndex);
+        const rawName = `${stem}${ext}`;
         const destPath = await this.resolveDestPath(attachmentFolder, rawName);
 
         try {
           await this.app.vault.adapter.writeBinary(destPath, buffer);
           urlToLocal.set(url, destPath);
-          savedCount++;
+          savedIndex++;
         } catch (err) {
           this.failedUrls.add(url);
           failedUrls.push(url);
