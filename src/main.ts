@@ -328,10 +328,16 @@ export default class AutoDownloadAttachmentsPlugin extends Plugin {
   // 将路径模板解析为 vault 根目录下的绝对路径
   // Resolve a path template into an absolute path from the vault root
   formatPathTemplate(template: string, file: TFile): string {
-    const noteName = sanitizeNoteName(file.basename);
+    const noteName  = sanitizeNoteName(file.basename);
+    // {notepath} 展开为笔记所在文件夹路径（vault 相对路径，已含 /）
+    // {notepath} expands to the note's parent folder path (vault-relative, includes /)
+    const notePath  = file.parent?.path ?? '';
     // 统一分隔符为 /，按段处理，逐段做占位符替换与清理，再重新拼接
     // Normalize separators to /, process per-segment, then rejoin
-    const segments = template.replace(/\\/g, '/').split('/');
+    // {notepath} 可能包含多段（如 Clippings/2026），先整体替换再按 / 拆段
+    // {notepath} may contain multiple segments; replace it first, then split on /
+    const withNotePath = template.replace(/\\/g, '/').replace(/{notepath}/g, notePath);
+    const segments = withNotePath.split('/');
     const resolved = segments
       .map(seg => {
         let out = seg;
