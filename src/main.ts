@@ -114,20 +114,21 @@ function parseFolders(raw: string): string[] {
     .filter(s => s.length > 0);
 }
 
-function sanitizeFolderName(name: string): string {
-  return name
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/\s+/g, '-')
-    .replace(/^[.\s]+|[.\s]+$/g, '')
-    || 'attachments';
+// 文件夹名清理：非法字符→下划线；keepSpaces=false 时空白→短横
+// Sanitize a folder name: illegal chars→underscore; whitespace→dash unless keepSpaces
+function sanitizeFolderName(name: string, keepSpaces = false): string {
+  let out = name.replace(/[\\/:*?"<>|]/g, '_');
+  if (!keepSpaces) out = out.replace(/\s+/g, '-');
+  out = out.replace(/^[.\s]+|[.\s]+$/g, '');
+  return out || 'attachments';
 }
 
-// 笔记名清理：空白→短横，非法字符→下划线（保留中文、字母、数字、下划线等）
-// Sanitize a note name: whitespace→dash, illegal chars→underscore (keeps CJK, letters, digits, underscores, etc.)
-function sanitizeNoteName(basename: string): string {
-  return basename
-    .replace(/\s+/g, '-')
-    .replace(/[\\/:*?"<>|]/g, '_');
+// 笔记名清理：非法字符→下划线；keepSpaces=false 时空白→短横
+// Sanitize a note name: illegal chars→underscore; whitespace→dash unless keepSpaces
+function sanitizeNoteName(basename: string, keepSpaces = false): string {
+  let out = basename.replace(/[\\/:*?"<>|]/g, '_');
+  if (!keepSpaces) out = out.replace(/\s+/g, '-');
+  return out;
 }
 
 // 左侧补零 | Left-pad a number with zeros to the given width
@@ -180,7 +181,7 @@ async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: numb
 
 // 将文件名模板解析为最终文件名主干（不含扩展名，可从 settings.ts 导入）
 // Resolve a filename template to a stem (no extension); exported so settings.ts can import it
-export function formatNameTemplate(template: string, noteName: string, index: number): string {
+export function formatNameTemplate(template: string, noteName: string, index: number, keepSpaces = false): string {
   let out = template;
   out = out.replace(/{date:([^}]+)}/g, (_, fmt: string) => formatDateToken(fmt));
   out = out.replace(/{notename}/g, noteName);
@@ -191,7 +192,11 @@ export function formatNameTemplate(template: string, noteName: string, index: nu
     const start = parseInt(digits, 10);
     return zeroPad(start + index, width);
   });
-  return out.replace(/\s+/g, '-').replace(/[\\/:*?"<>|]/g, '_');
+  // 非法文件名字符永远替换；空白仅在 keepSpaces=false 时转短横
+  // Illegal filename chars always replaced; whitespace→dash only unless keepSpaces
+  out = out.replace(/[\\/:*?"<>|]/g, '_');
+  if (!keepSpaces) out = out.replace(/\s+/g, '-');
+  return out;
 }
 
 // 从 frontmatter 的 source 字段提取网页来源 URL 作为 Referer
@@ -328,7 +333,8 @@ export default class AutoDownloadAttachmentsPlugin extends Plugin {
   // 将路径模板解析为 vault 根目录下的绝对路径
   // Resolve a path template into an absolute path from the vault root
   formatPathTemplate(template: string, file: TFile): string {
-    const noteName  = sanitizeNoteName(file.basename);
+    const keepSpaces = this.settings.keepOriginalNoteName;
+    const noteName  = sanitizeNoteName(file.basename, keepSpaces);
     // {notepath} 展开为笔记所在文件夹路径（vault 相对路径，已含 /）
     // {notepath} expands to the note's parent folder path (vault-relative, includes /)
     const notePath  = file.parent?.path ?? '';
@@ -343,7 +349,7 @@ export default class AutoDownloadAttachmentsPlugin extends Plugin {
         let out = seg;
         out = out.replace(/{date:([^}]+)}/g, (_, fmt: string) => formatDateToken(fmt));
         out = out.replace(/{notename}/g, noteName);
-        return sanitizeFolderName(out);
+        return sanitizeFolderName(out, keepSpaces);
       })
       .filter(seg => seg.length > 0);
     return normalizePath(resolved.join('/'));
@@ -352,7 +358,7 @@ export default class AutoDownloadAttachmentsPlugin extends Plugin {
   // 将文件名模板解析为最终文件名主干（不含扩展名）
   // Resolve a filename template into the final name stem (without extension)
   formatNameTemplate(template: string, noteName: string, index: number): string {
-    return formatNameTemplate(template, noteName, index);
+    return formatNameTemplate(template, noteName, index, this.settings.keepOriginalNoteName);
   }
 
   async downloadImagesInFile(file: TFile): Promise<void> {
@@ -393,7 +399,7 @@ export default class AutoDownloadAttachmentsPlugin extends Plugin {
       const attachmentFolder = this.resolveAttachmentFolder(file);
       await this.ensureFolder(attachmentFolder);
 
-      const noteName = sanitizeNoteName(file.basename);
+      const noteName = sanitizeNoteName(file.basename, this.settings.keepOriginalNoteName);
 
       const urlToLocal = new Map<string, string>();
       const failedUrls: string[]  = [];

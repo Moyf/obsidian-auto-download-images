@@ -32,6 +32,8 @@ export interface TranslationMap {
   imageNameTemplateSettingName:    string;
   imageNameTemplateSettingDesc:    string;
   imageNameTemplatePlaceholder:    string;
+  keepOriginalNameSettingName:     string;
+  keepOriginalNameSettingDesc:     string;
   previewLabel:                    (preview: string) => string;
   previewNoteName:                 string;
   previewNotePath:                 string;
@@ -88,6 +90,8 @@ export const TRANSLATIONS: Record<string, TranslationMap> = {
     imageNameTemplateSettingName:     'Image filename template',
     imageNameTemplateSettingDesc:     'Use {notename} for the note name, {index:NNN} for a numeric suffix (e.g. {index:01} gives a two-digit counter starting from 01), {date:FORMAT} for the date. Extension is added automatically.',
     imageNameTemplatePlaceholder:     '{notename}-img-p{index:001}',
+    keepOriginalNameSettingName:      'Keep original note name',
+    keepOriginalNameSettingDesc:      'When on, spaces in the note name are preserved instead of being converted to dashes. Characters illegal on the filesystem (\\ / : * ? " < > |) are always replaced.',
     previewLabel:                     (preview) => `→ ${preview}`,
     previewNoteName:                  'Note name',
     previewNotePath:                  'note/folder',
@@ -145,6 +149,8 @@ export const TRANSLATIONS: Record<string, TranslationMap> = {
     imageNameTemplateSettingName:     '图片文件名模板',
     imageNameTemplateSettingDesc:     '图片文件名模板。可用 {notename} 代表笔记名，{index:NNN} 数字后缀（如 {index:01} 代表从 01 开始的两位数字序号），同样可以使用 {date:日期格式}。不需要填写后缀名。',
     imageNameTemplatePlaceholder:     '{notename}-img-p{index:001}',
+    keepOriginalNameSettingName:      '保持原始笔记名',
+    keepOriginalNameSettingDesc:      '开启后，笔记名中的空格将被保留，不再转为短横。文件系统非法字符（\\ / : * ? " < > |）始终会被替换。',
     previewLabel:                     (preview) => `→ ${preview}`,
     previewNoteName:                  '笔记名',
     previewNotePath:                  '笔记文件夹',
@@ -189,6 +195,7 @@ export interface AutoDownloadSettings {
   customAttachmentFolder: string;
   customTemplateFolder:   string;
   imageNameTemplate:      string;
+  keepOriginalNoteName:   boolean;
 }
 
 export const DEFAULT_SETTINGS: AutoDownloadSettings = {
@@ -199,6 +206,7 @@ export const DEFAULT_SETTINGS: AutoDownloadSettings = {
   customAttachmentFolder: 'attachments',
   customTemplateFolder:   '_global/assets/{date:YYYY-MM}',
   imageNameTemplate:      '{notename}-img-p{index:001}',
+  keepOriginalNoteName:   false,
 };
 
 // ─── 设置页 / Settings tab ─────────────────────────────────────────────────
@@ -224,6 +232,7 @@ export class AutoDownloadSettingTab extends PluginSettingTab {
   // 将模板渲染为预览字符串（{notename}/{notepath} 替换为占位词，其他 token 正常展开）
   // Render a template to a preview string ({notename}/{notepath} → placeholder words, other tokens expanded normally)
   private buildPreview(template: string, t: TranslationMap, mode: 'filename' | 'path'): string {
+    const keepSpaces = this.plugin.settings.keepOriginalNoteName;
     const namePH   = t.previewNoteName;
     const pathPH   = t.previewNotePath;
     // 用哨兵字符替换两个 notename/notepath 占位符，展开其余 token 后再换回
@@ -237,12 +246,12 @@ export class AutoDownloadSettingTab extends PluginSettingTab {
       // 路径模式：按段展开，保留 /
       // Path mode: expand per-segment, preserve /
       const segments = template.replace(/\\/g, '/').split('/').filter(s => s.length > 0);
-      const expanded = segments.map(seg => restore(formatNameTemplate(sentinel(seg), '\x00', 0)));
+      const expanded = segments.map(seg => restore(formatNameTemplate(sentinel(seg), '\x00', 0, keepSpaces)));
       return expanded.join('/');
     }
     // 文件名模式：整体展开
     // Filename mode: expand as a whole
-    return restore(formatNameTemplate(sentinel(template), '\x00', 0)) + '.webp';
+    return restore(formatNameTemplate(sentinel(template), '\x00', 0, keepSpaces)) + '.webp';
   }
 
   // 将预览行插入到 .setting-item-description 之后（或直接更新已有节点）
@@ -306,6 +315,8 @@ export class AutoDownloadSettingTab extends PluginSettingTab {
           });
         text.inputEl.rows = 6;
         text.inputEl.addClass('auto-dl-folder-input');
+        const ctrl = text.inputEl.parentElement;
+        if (ctrl) ctrl.style.flex = '0 0 auto';
       });
 
     // ── 触发延迟 / Debounce delay ─────────────────────────────────────────
@@ -411,5 +422,21 @@ export class AutoDownloadSettingTab extends PluginSettingTab {
       nameSetting.settingEl,
       t.previewLabel(this.buildPreview(this.plugin.settings.imageNameTemplate, t, 'filename'))
     );
+
+    // ── 保持原始笔记名 / Keep original note name ─────────────────────────
+    new Setting(containerEl)
+      .setName(t.keepOriginalNameSettingName)
+      .setDesc(t.keepOriginalNameSettingDesc)
+      .addToggle(toggle => {
+        toggle
+          .setValue(this.plugin.settings.keepOriginalNoteName)
+          .onChange(async (value) => {
+            this.plugin.settings.keepOriginalNoteName = value;
+            await this.plugin.saveSettings();
+            // 开关变化影响预览，整页刷新以同步所有预览
+            // The toggle affects previews; refresh the whole page to sync them
+            this.display();
+          });
+      });
   }
 }
