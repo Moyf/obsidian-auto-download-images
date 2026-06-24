@@ -131,7 +131,7 @@ function sanitizeNoteName(basename: string): string {
 }
 
 // 左侧补零 | Left-pad a number with zeros to the given width
-function zeroPad(num: number, width: number): string {
+export function zeroPad(num: number, width: number): string {
   let s = String(num);
   while (s.length < width) s = '0' + s;
   return s;
@@ -139,7 +139,7 @@ function zeroPad(num: number, width: number): string {
 
 // 日期格式化（手写子集，避免依赖 moment）| Date formatter (hand-written subset, no moment dependency)
 // 支持 token：YYYY YY MM M DD D HH H mm m ss s | Supported tokens
-function formatDateToken(token: string, date: Date = new Date()): string {
+export function formatDateToken(token: string, date: Date = new Date()): string {
   const map: Record<string, string> = {
     'YYYY': String(date.getFullYear()),
     'YY':   String(date.getFullYear()).slice(-2),
@@ -176,6 +176,22 @@ async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: numb
     Array.from({ length: Math.min(limit, tasks.length) }, worker)
   );
   return results;
+}
+
+// 将文件名模板解析为最终文件名主干（不含扩展名，可从 settings.ts 导入）
+// Resolve a filename template to a stem (no extension); exported so settings.ts can import it
+export function formatNameTemplate(template: string, noteName: string, index: number): string {
+  let out = template;
+  out = out.replace(/{date:([^}]+)}/g, (_, fmt: string) => formatDateToken(fmt));
+  out = out.replace(/{notename}/g, noteName);
+  // {index:NNN} —— NNN 的位数决定补零宽度，数值决定起始值
+  // {index:NNN} — width = number of digits in NNN, start = numeric value of NNN
+  out = out.replace(/{index:(\d+)}/g, (_, digits: string) => {
+    const width = digits.length;
+    const start = parseInt(digits, 10);
+    return zeroPad(start + index, width);
+  });
+  return out.replace(/\s+/g, '-').replace(/[\\/:*?"<>|]/g, '_');
 }
 
 // 从 frontmatter 的 source 字段提取网页来源 URL 作为 Referer
@@ -330,19 +346,7 @@ export default class AutoDownloadAttachmentsPlugin extends Plugin {
   // 将文件名模板解析为最终文件名主干（不含扩展名）
   // Resolve a filename template into the final name stem (without extension)
   formatNameTemplate(template: string, noteName: string, index: number): string {
-    let out = template;
-    out = out.replace(/{date:([^}]+)}/g, (_, fmt: string) => formatDateToken(fmt));
-    out = out.replace(/{notename}/g, noteName);
-    // {index:NNN} —— NNN 的位数决定补零宽度，数值决定起始值
-    // {index:NNN} — width = number of digits, start = numeric value of digits
-    out = out.replace(/{index:(\d+)}/g, (_, digits: string) => {
-      const width = digits.length;
-      const start = parseInt(digits, 10);
-      return zeroPad(start + index, width);
-    });
-    // 清理非法文件名字符
-    // Sanitize illegal filename characters
-    return out.replace(/\s+/g, '-').replace(/[\\/:*?"<>|]/g, '_');
+    return formatNameTemplate(template, noteName, index);
   }
 
   async downloadImagesInFile(file: TFile): Promise<void> {
