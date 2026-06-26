@@ -38,6 +38,13 @@ export interface TranslationMap {
   previewNoteName:                 string;
   previewNotePath:                 string;
 
+  linkFormatSettingName:   string;
+  linkFormatSettingDesc:   string;
+  linkFormatObsidian:      string;
+  linkFormatShortest:      string;
+  linkFormatRelative:      string;
+  linkFormatAbsolute:      string;
+
   noticeSuccess:           (count: number, name: string) => string;
   noticePartial:           (ok: number, fail: number, name: string) => string;
   noticeWriteError:        (name: string) => string;
@@ -95,6 +102,13 @@ export const TRANSLATIONS: Record<string, TranslationMap> = {
     previewLabel:                     (preview) => `→ ${preview}`,
     previewNoteName:                  'Note name',
     previewNotePath:                  'note/folder',
+
+    linkFormatSettingName:      'Image link path format',
+    linkFormatSettingDesc:      'How the path inside the embedded image reference is written. "Follow Obsidian settings" mirrors Files & Links → New link format.',
+    linkFormatObsidian:         'Follow Obsidian settings',
+    linkFormatShortest:         'Shortest path when possible',
+    linkFormatRelative:         'Relative path to note',
+    linkFormatAbsolute:         'Absolute path in vault',
 
     noticeSuccess:              (count, name) => `✅ Downloaded ${count} image(s) — ${name}`,
     noticePartial:              (ok, fail, name) => `⚠️ ${name}: ${ok} succeeded, ${fail} failed (original links kept)`,
@@ -155,6 +169,13 @@ export const TRANSLATIONS: Record<string, TranslationMap> = {
     previewNoteName:                  '笔记名',
     previewNotePath:                  '笔记文件夹',
 
+    linkFormatSettingName:      '图片链接路径格式',
+    linkFormatSettingDesc:      '嵌入图片时路径的书写方式。「跟随 Obsidian 设置」对应「文件与链接 → 新链接格式」。',
+    linkFormatObsidian:         '跟随 Obsidian 设置',
+    linkFormatShortest:         '最短路径（尽可能）',
+    linkFormatRelative:         '相对路径（相对于笔记）',
+    linkFormatAbsolute:         '绝对路径（vault 内）',
+
     noticeSuccess:              (count, name) => `✅ 图片下载完成：${count} 张（${name}）`,
     noticePartial:              (ok, fail, name) => `⚠️ ${name}：${ok} 张成功，${fail} 张失败（已保留原始链接）`,
     noticeWriteError:           (name) => `[AutoDL] 写回 ${name} 失败，请查看控制台日志`,
@@ -185,6 +206,7 @@ export function detectObsidianLang(): string {
 // ─── 设置接口 / Settings interface ────────────────────────────────────────
 
 export type AttachmentPathMode = 'obsidian' | 'custom' | 'samename' | 'customTemplate';
+export type LinkPathFormat = 'obsidian' | 'shortest' | 'relative' | 'absolute';
 export type Language = 'auto' | 'en' | 'zh';
 
 export interface AutoDownloadSettings {
@@ -196,6 +218,7 @@ export interface AutoDownloadSettings {
   customTemplateFolder:   string;
   imageNameTemplate:      string;
   keepOriginalNoteName:   boolean;
+  linkPathFormat:         LinkPathFormat;
 }
 
 export const DEFAULT_SETTINGS: AutoDownloadSettings = {
@@ -207,6 +230,7 @@ export const DEFAULT_SETTINGS: AutoDownloadSettings = {
   customTemplateFolder:   '_global/assets/{date:YYYY-MM}',
   imageNameTemplate:      '{notename}-img-p{index:001}',
   keepOriginalNoteName:   false,
+  linkPathFormat:         'obsidian',
 };
 
 // ─── 设置页 / Settings tab ─────────────────────────────────────────────────
@@ -436,6 +460,23 @@ export class AutoDownloadSettingTab extends PluginSettingTab {
             // 开关变化影响预览，整页刷新以同步所有预览
             // The toggle affects previews; refresh the whole page to sync them
             this.display();
+          });
+      });
+
+    // ── 图片链接路径格式 / Image link path format ─────────────────────────
+    new Setting(containerEl)
+      .setName(t.linkFormatSettingName)
+      .setDesc(t.linkFormatSettingDesc)
+      .addDropdown(drop => {
+        drop
+          .addOption('obsidian',  t.linkFormatObsidian)
+          .addOption('shortest',  t.linkFormatShortest)
+          .addOption('relative',  t.linkFormatRelative)
+          .addOption('absolute',  t.linkFormatAbsolute)
+          .setValue(this.plugin.settings.linkPathFormat)
+          .onChange(async (value) => {
+            this.plugin.settings.linkPathFormat = value as LinkPathFormat;
+            await this.plugin.saveSettings();
           });
       });
   }
