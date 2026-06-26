@@ -45,6 +45,19 @@ export interface TranslationMap {
   linkFormatRelative:      string;
   linkFormatAbsolute:      string;
 
+  contextMenuSettingName:  string;
+  contextMenuSettingDesc:  string;
+  menuDownloadFolder:      string;
+  menuDownloadFile:        string;
+  confirmTitle:            string;
+  confirmBody:             (files: number, images: number, name: string) => string;
+  confirm:                 string;
+  cancel:                  string;
+  noticeFolderEmpty:       (name: string) => string;
+  noticeNoExternal:        (name: string) => string;
+  noticeCancelled:         string;
+  noticeBatchDone:         (name: string) => string;
+
   noticeSuccess:           (count: number, name: string) => string;
   noticePartial:           (ok: number, fail: number, name: string) => string;
   noticeWriteError:        (name: string) => string;
@@ -109,6 +122,19 @@ export const TRANSLATIONS: Record<string, TranslationMap> = {
     linkFormatShortest:         'Shortest path when possible',
     linkFormatRelative:         'Relative path to note',
     linkFormatAbsolute:         'Absolute path in vault',
+
+    contextMenuSettingName:     'Add right-click menu',
+    contextMenuSettingDesc:     'Add a context-menu item to files and folders to download their external image links on demand.',
+    menuDownloadFolder:         'Download external images in this folder',
+    menuDownloadFile:           'Download external images in this file',
+    confirmTitle:               'Confirm download',
+    confirmBody:                (files, images, name) => `Found ${images} external image(s) across ${files} markdown file(s) under "${name}". Download them all?`,
+    confirm:                    'Download',
+    cancel:                     'Cancel',
+    noticeFolderEmpty:          (name) => `No markdown files under "${name}"`,
+    noticeNoExternal:           (name) => `No external images found under "${name}"`,
+    noticeCancelled:            'Cancelled',
+    noticeBatchDone:            (name) => `Finished downloading external images in "${name}"`,
 
     noticeSuccess:              (count, name) => `✅ Downloaded ${count} image(s) — ${name}`,
     noticePartial:              (ok, fail, name) => `⚠️ ${name}: ${ok} succeeded, ${fail} failed (original links kept)`,
@@ -176,6 +202,19 @@ export const TRANSLATIONS: Record<string, TranslationMap> = {
     linkFormatRelative:         '相对路径（相对于笔记）',
     linkFormatAbsolute:         '绝对路径（vault 内）',
 
+    contextMenuSettingName:     '添加右键菜单',
+    contextMenuSettingDesc:     '给文件和文件夹添加右键菜单项，按需下载其中的外部图片链接。',
+    menuDownloadFolder:         '下载该文件夹的外部图片',
+    menuDownloadFile:           '下载该文件的外部图片',
+    confirmTitle:               '确认下载',
+    confirmBody:                (files, images, name) => `在「${name}」下发现 ${images} 张外部图片，分布于 ${files} 个 Markdown 文件。是否全部下载？`,
+    confirm:                    '下载',
+    cancel:                     '取消',
+    noticeFolderEmpty:          (name) => `「${name}」下没有 Markdown 文件`,
+    noticeNoExternal:           (name) => `「${name}」下没有外部图片`,
+    noticeCancelled:            '已取消',
+    noticeBatchDone:            (name) => `已完成「${name}」中外部图片的下载`,
+
     noticeSuccess:              (count, name) => `✅ 图片下载完成：${count} 张（${name}）`,
     noticePartial:              (ok, fail, name) => `⚠️ ${name}：${ok} 张成功，${fail} 张失败（已保留原始链接）`,
     noticeWriteError:           (name) => `[AutoDL] 写回 ${name} 失败，请查看控制台日志`,
@@ -219,6 +258,7 @@ export interface AutoDownloadSettings {
   imageNameTemplate:      string;
   keepOriginalNoteName:   boolean;
   linkPathFormat:         LinkPathFormat;
+  enableContextMenu:      boolean;
 }
 
 export const DEFAULT_SETTINGS: AutoDownloadSettings = {
@@ -231,6 +271,7 @@ export const DEFAULT_SETTINGS: AutoDownloadSettings = {
   imageNameTemplate:      '{notename}-img-p{index:001}',
   keepOriginalNoteName:   false,
   linkPathFormat:         'obsidian',
+  enableContextMenu:      false,
 };
 
 // ─── 设置页 / Settings tab ─────────────────────────────────────────────────
@@ -476,6 +517,19 @@ export class AutoDownloadSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.linkPathFormat)
           .onChange(async (value) => {
             this.plugin.settings.linkPathFormat = value as LinkPathFormat;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    // ── 右键菜单 / Context menu ──────────────────────────────────────────
+    new Setting(containerEl)
+      .setName(t.contextMenuSettingName)
+      .setDesc(t.contextMenuSettingDesc)
+      .addToggle(toggle => {
+        toggle
+          .setValue(this.plugin.settings.enableContextMenu)
+          .onChange(async (value) => {
+            this.plugin.settings.enableContextMenu = value;
             await this.plugin.saveSettings();
           });
       });

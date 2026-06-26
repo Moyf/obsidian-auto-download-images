@@ -1,6 +1,6 @@
 /* global Buffer -- Node.js global available in Electron renderer */
 
-import { Notice, Plugin, TFile, normalizePath } from 'obsidian';
+import { Modal, Notice, Plugin, TFile, TFolder, normalizePath } from 'obsidian';
 import {
   AutoDownloadSettings,
   AutoDownloadSettingTab,
@@ -282,6 +282,31 @@ export default class AutoDownloadAttachmentsPlugin extends Plugin {
       })
     );
 
+    // 右键菜单：给文件 / 文件夹加入「按需下载外部图片」入口
+    // Context menu: on-demand download entry for files and folders
+    this.registerEvent(
+      this.app.workspace.on('file-menu', (menu, file) => {
+        if (!this.settings.enableContextMenu) return;
+        const t = this.t;
+
+        if (file instanceof TFolder) {
+          menu.addItem(item => {
+            item
+              .setTitle(t.menuDownloadFolder)
+              .setIcon('download')
+              .onClick(() => { void this.downloadFolderExternalImages(file); });
+          });
+        } else if (file instanceof TFile && file.extension === 'md') {
+          menu.addItem(item => {
+            item
+              .setTitle(t.menuDownloadFile)
+              .setIcon('download')
+              .onClick(() => { void this.downloadImagesInFile(file); });
+          });
+        }
+      })
+    );
+
     const folders = this._watchedFolders.join(', ');
     console.debug(this.t.consoleLoaded(folders));
   }
@@ -376,7 +401,7 @@ export default class AutoDownloadAttachmentsPlugin extends Plugin {
         return;
       }
 
-      const mdMatches   = [...content.matchAll(MD_IMAGE_REGEX)];
+      const mdMatches = [...content.matchAll(MD_IMAGE_REGEX)];
       const htmlMatches = [...content.matchAll(HTML_IMG_REGEX)];
       if (mdMatches.length === 0 && htmlMatches.length === 0) return;
 
@@ -389,11 +414,7 @@ export default class AutoDownloadAttachmentsPlugin extends Plugin {
         console.debug(t.consoleRefererFallback);
       }
 
-      const allUrls = [
-        ...mdMatches.map(m => m[2]),
-        ...htmlMatches.map(m => m[1] ?? m[2]),
-      ].filter((u): u is string => Boolean(u));
-      const uniqueUrls = [...new Set(allUrls)].filter(u => !this.failedUrls.has(u));
+      const uniqueUrls = this.extractExternalUrls(content).filter(u => !this.failedUrls.has(u));
       if (uniqueUrls.length === 0) return;
 
       const attachmentFolder = this.resolveAttachmentFolder(file);
@@ -491,6 +512,113 @@ export default class AutoDownloadAttachmentsPlugin extends Plugin {
     } finally {
       this.processingFiles.delete(file.path);
     }
+  }
+
+  // ── 右键菜单：批量下载 / Context menu: batch download ─────────────────────
+
+  // 从正文提取去重后的外部图片 URL 列表（markdown 图片 + HTML img 标签）
+  // Extract de-duplicated external image URLs from content (markdown images + HTML img tags)
+  extractExternalUrls(content: string): string[] {
+    const mdMatches   = [...content.matchAll(MD_IMAGE_REGEX)];
+    const htmlMatches = [...content.matchAll(HTML_IMG_REGEX)];
+    const allUrls = [
+      ...mdMatches.map(m => m[2]),
+      ...htmlMatches.map(m => m[1] ?? m[2]),
+    ].filter((u): u is string => Boolean(u));
+    return [...new Set(allUrls)];
+  }
+
+  // 递归收集某文件夹下所有 .md 文件 | Recursively collect all .md files under a folder
+  private collectMarkdownFiles(folder: TFolder): TFile[] {
+    const result: TFile[] = [];
+    const stack: TFolder[] = [folder];
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      for (const child of cur.children) {
+        if (child instanceof TFile && child.extension === 'md') {
+          result.push(child);
+        } else if (child instanceof TFolder) {
+          stack.push(child);
+        }
+      }
+    }
+    return result;
+  }
+
+  // 扫描文件列表，统计含外部图片的文件数与外部图片总数（用于确认弹窗）
+  // Scan files to count those containing external images and the total external image count (for the confirm dialog)
+  private async scanExternalImages(files: TFile[]): Promise<{ filesWithImages: number; totalImages: number }> {
+    let filesWithImages = 0;
+    let totalImages = 0;
+    for (const f of files) {
+      try {
+        const content = await this.app.vault.read(f);
+        const urls = this.extractExternalUrls(content);
+        if (urls.length > 0) {
+          filesWithImages++;
+          totalImages += urls.length;
+        }
+      } catch {
+        // 跳过无法读取的文件 | skip unreadable files
+      }
+    }
+    return { filesWithImages, totalImages };
+  }
+
+  async downloadFolderExternalImages(folder: TFolder): Promise<void> {
+    const t = this.t;
+    const mdFiles = this.collectMarkdownFiles(folder);
+    if (mdFiles.length === 0) {
+      new Notice(t.noticeFolderEmpty(folder.name));
+      return;
+    }
+
+    const { filesWithImages, totalImages } = await this.scanExternalImages(mdFiles);
+    if (totalImages === 0) {
+      new Notice(t.noticeNoExternal(folder.name));
+      return;
+    }
+
+    const confirmed = await this.confirmDialog(
+      t.confirmTitle,
+      t.confirmBody(filesWithImages, totalImages, folder.name),
+    );
+    if (!confirmed) {
+      new Notice(t.noticeCancelled);
+      return;
+    }
+
+    // 逐文件复用单文件下载流程（内部已有并发控制与去重）
+    // Reuse the single-file pipeline per file (it already handles concurrency & dedup)
+    for (const f of mdFiles) {
+      await this.downloadImagesInFile(f);
+    }
+    new Notice(t.noticeBatchDone(folder.name));
+  }
+
+  // 简易确认弹窗：返回用户是否点击了主操作按钮
+  // Minimal confirm dialog: resolves to whether the primary button was clicked
+  private confirmDialog(title: string, body: string): Promise<boolean> {
+    const t = this.t;
+    return new Promise(resolve => {
+      const modal = new Modal(this.app);
+      modal.titleEl.setText(title);
+      modal.contentEl.createEl('p', { text: body });
+
+      const btns = modal.contentEl.createDiv({ cls: 'modal-button-container' });
+      const cancelBtn = btns.createEl('button', { text: t.cancel });
+      cancelBtn.addEventListener('click', () => { modal.close(); });
+      const okBtn = btns.createEl('button', { text: t.confirm, cls: 'mod-cta' });
+      okBtn.addEventListener('click', () => {
+        (modal as Modal & { result: boolean }).result = true;
+        modal.close();
+      });
+
+      modal.onClose = () => {
+        resolve(Boolean((modal as Modal & { result?: boolean }).result));
+      };
+      modal.open();
+    });
   }
 
   // ── 下载方法 / Download methods ──────────────────────────────────────────
